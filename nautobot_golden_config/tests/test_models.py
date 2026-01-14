@@ -710,6 +710,8 @@ def load_fixture(filename: str) -> Any:
 
 
 class TestDictKey(TestCase):
+    """Test cases for the DictKey class."""
+
     def test_str_and_repr(self):
         k = DictKey("foo")
         self.assertEqual(str(k), "foo")
@@ -717,6 +719,8 @@ class TestDictKey(TestCase):
 
 
 class TestWrapDictKeys(TestCase):
+    """Test cases for the _wrap_dict_keys function."""
+
     def test_wrap_dict_keys(self):
         obj = {"a": 1, "b": {"c": 2}, "d": [3, {"e": 4}]}
         wrapped = _wrap_dict_keys(obj)
@@ -731,6 +735,8 @@ class TestWrapDictKeys(TestCase):
 
 
 class TestCreateDeepDiffObject(TestCase):
+    """Test cases for the _create_deepdiff_object function."""
+
     def test_deepdiff_object(self):
         a = {"foo": 1, "bar": 2}
         b = {"foo": 1, "bar": 3}

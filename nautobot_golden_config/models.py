@@ -332,7 +332,7 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
         self.intended_config: dict[str, Any] | str = compliance_obj.intended
         self.backup_config: dict[str, Any] | str = compliance_obj.actual
 
-    def _filter_allowed_params(
+    def _filter_allowed_params(  # pylint: disable=too-many-branches
         self,
         feature_name: str,
         config: dict[str, Any],
@@ -437,8 +437,8 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
 
             if isinstance(key, int):
                 if not isinstance(cur, list):
-                    msg: str = f"Expected list at path[{i}] (index {key}), got {type(cur)}"
-                    raise TypeError(msg)
+                    err_msg: str = f"Expected list at path[{i}] (index {key}), got {type(cur)}"
+                    raise TypeError(err_msg)
 
                 while len(cur) <= key:
                     cur.append(None)
@@ -455,8 +455,8 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
 
             if isinstance(key, (str, float)):
                 if not isinstance(cur, dict):
-                    msg: str = f"Expected dict at path[{i}] (key {key!r}), got {type(cur)}"
-                    raise TypeError(msg)
+                    err_msg: str = f"Expected dict at path[{i}] (key {key!r}), got {type(cur)}"
+                    raise TypeError(err_msg)
 
                 if is_last:
                     cur[key] = value
@@ -468,8 +468,8 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
                 cur = cur[key]
                 continue
 
-            msg: str = f"Unsupported key type at path[{i}]: {type(key)} ({key!r})"
-            raise TypeError(msg)
+            err_msg: str = f"Unsupported key type at path[{i}]: {type(key)} ({key!r})"
+            raise TypeError(err_msg)
 
     def _apply_deepdiff_changes(self, delta: dict[Any, Any], changes: list[Any]) -> None:
         """Apply DeepDiff change objects onto the delta payload using intended-side values (t2).
@@ -548,8 +548,8 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
             if isinstance(self.intended_config, str):
                 self.intended_config = json.loads(self.intended_config)
         except json.JSONDecodeError as exc:
-            msg: str = f"Invalid JSON config: {exc}"
-            raise ValidationError(msg) from exc
+            err_msg: str = f"Invalid JSON config: {exc}"
+            raise ValidationError(err_msg) from exc
 
         if config_context.get("remediate_full_intended"):
             return json.dumps(obj=self.intended_config, indent=4)
@@ -566,8 +566,8 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
         )
 
         if not actual or not intended:
-            msg: str = "There was no config context fields that matched the intended or actual configuration."
-            raise ValidationError(msg)
+            err_msg: str = "There was no config context fields that matched the intended or actual configuration."
+            raise ValidationError(err_msg)
 
         dict_key_intended: list[Any] | dict[Any, Any] = _wrap_dict_keys(obj=intended)
         dict_key_actual: list[Any] | dict[Any, Any] = _wrap_dict_keys(obj=actual)
