@@ -303,8 +303,8 @@ def _create_deepdiff_object(actual: list[Any] | dict[Any, Any], intended: list[A
     dd = DeepDiff(
         t1=actual,
         t2=intended,
-        view="tree",  # critical: gives path(), t1, t2
-        verbose_level=2,  # include values
+        view="tree",
+        verbose_level=2,
     )
     return dd
 
@@ -329,21 +329,21 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
         """
         self.compliance_obj = compliance_obj
         self.feature_name: str = compliance_obj.rule.feature.name.lower()
-        self.intended_config: dict[str, Any] = compliance_obj.intended
-        self.backup_config: dict[str, Any] = compliance_obj.actual
+        self.intended_config: dict[str, Any] | str = compliance_obj.intended
+        self.backup_config: dict[str, Any] | str = compliance_obj.actual
 
     def _filter_allowed_params(
         self,
         feature_name: str,
         config: dict[str, Any],
-        config_context: dict[str, Any] | None,
+        config_context: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
         """Filter allowed parameters and remove unwanted parameters.
 
         Args:
             feature_name (str): Compliance feature name.
-            config (Optional[dict[str, Any]]): Intended or actual config.
-            config_context (ConfigContext): Device config context.
+            config (dict[str, Any]): Intended or actual config.
+            config_context (list[dict[str, Any]] | None): Device config context.
 
         Returns:
             dict[str, Any]: Filtered config.
@@ -356,16 +356,23 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
                 return {}
             endpoint_fields.extend(endpoint["fields"])
 
-        if isinstance(config[feature_name], dict):
+        feature_value: Any = config.get(feature_name)
+
+        if feature_value is None:
+            return {}
+
+        if isinstance(feature_value, dict):
             valid_payload_config: dict[str, Any] = {feature_name: {}}
-            for key, value in config[feature_name].items():
+            for key, value in feature_value.items():
                 if key in endpoint_fields:
                     valid_payload_config[feature_name][key] = value
             return valid_payload_config
 
-        if isinstance(config[feature_name], list):
+        if isinstance(feature_value, list):
             valid_payload_config: dict[str, Any] = {feature_name: []}
-            for item in config[feature_name]:
+            for item in feature_value:
+                if not isinstance(item, dict):
+                    continue
                 params_dict = {}
                 for key, value in item.items():
                     if key in endpoint_fields:
@@ -401,46 +408,10 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
 
         return obj
 
-    def _extract_path_tokens(self, change: Any) -> list[Any] | None:
-        """Extract DeepDiff tree path tokens in list form and strip the 'root' token.
-
-        This implementation intentionally requires list tokens (output_format="list"),
-        because `_process_diff` expects typed tokens (DictKey vs int indices).
-
-        Args:
-            change (Any): DeepDiff tree change object.
-
-        Returns:
-            list[Any] | None: Path tokens without the leading 'root', or None if unavailable.
-        """
-        if not hasattr(change, "path"):
-            return None
-
-        try:
-            tokens = change.path(output_format="list")
-        except TypeError:
-            return None
-
-        if tokens and tokens[0] == "root":
-            tokens = tokens[1:]
-
-        return tokens or None
-
-    def _make_container_for(self, next_key: Any) -> list[Any] | dict[Any, Any]:
-        """Choose container type based on the upcoming path token.
-
-        Args:
-            next_key (Any): Next path token (DictKey, str, or int list index).
-
-        Returns:
-            list[Any] | dict[Any, Any]: New container (list or dict).
-        """
-        return [] if isinstance(next_key, int) else {}
-
     def _process_diff(  # pylint: disable=too-many-branches
         self,
         diff: dict[Any, Any],
-        path: tuple[str, ...],
+        path: tuple[Any, ...],
         value: Any,
     ) -> None:
         """Populate a nested delta structure given a DeepDiff path and value.
@@ -450,7 +421,7 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
 
         Args:
             diff (dict[Any, Any]): Delta dictionary being populated.
-            path (tuple[str, ...]): Path tokens (DictKey, str, or int list indices).
+            path (tuple[Any, ...]): Path tokens (DictKey, str, or int list indices).
             value (Any): Value to assign at the leaf path.
 
         Raises:
@@ -464,29 +435,24 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
 
             key = raw_key.key if isinstance(raw_key, DictKey) else raw_key
 
-            # 2) List index hop
             if isinstance(key, int):
                 if not isinstance(cur, list):
                     msg: str = f"Expected list at path[{i}] (index {key}), got {type(cur)}"
                     raise TypeError(msg)
 
-                # Grow list with correctly-typed placeholders based on upcoming hop.
-                placeholder = {} if is_last else self._make_container_for(next_key)
                 while len(cur) <= key:
-                    cur.append(placeholder if len(cur) == key else {})
+                    cur.append(None)
 
                 if is_last:
                     cur[key] = value
                     return
 
-                # Ensure element is a container we can descend into
-                if not isinstance(cur[key], (dict, list)):
-                    cur[key] = self._make_container_for(next_key)
+                if cur[key] is None or not isinstance(cur[key], (dict, list)):
+                    cur[key] = [] if isinstance(next_key, int) else {}
 
                 cur = cur[key]
                 continue
 
-            # 3) Dict-key hop (covers str/float and any other hashable keys you allow)
             if isinstance(key, (str, float)):
                 if not isinstance(cur, dict):
                     msg: str = f"Expected dict at path[{i}] (key {key!r}), got {type(cur)}"
@@ -497,12 +463,11 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
                     return
 
                 if key not in cur or not isinstance(cur[key], (dict, list)):
-                    cur[key] = self._make_container_for(next_key)
+                    cur[key] = [] if isinstance(next_key, int) else {}
 
                 cur = cur[key]
                 continue
 
-            # 4) Unsupported token
             msg: str = f"Unsupported key type at path[{i}]: {type(key)} ({key!r})"
             raise TypeError(msg)
 
@@ -517,33 +482,24 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
             if not hasattr(change, "t2"):
                 continue
 
-            path_tokens = self._extract_path_tokens(change)
-            if not path_tokens:
+            if not hasattr(change, "path"):
                 continue
+
+            try:
+                tokens = change.path(output_format="list")
+            except (TypeError, AttributeError):
+                continue
+
+            if tokens and tokens[0] == "root":
+                tokens = tokens[1:]
 
             self._process_diff(
                 diff=delta,
-                path=tuple(path_tokens),
+                path=tuple(tokens),
                 value=change.t2,
             )
 
-    def _build_intended_delta(self, deepdiff_obj: DeepDiff) -> dict[Any, Any]:
-        """Build an intended-shaped delta from a DeepDiff(tree) result dict.
-
-        Only includes change types that represent what is needed to reach intended (t2).
-
-        Args:
-            deepdiff_obj (dict[Any, Any]): DeepDiff(tree) result dict.
-
-        Returns:
-            dict[Any, Any]: Intended-shaped delta containing only changed/added paths.
-        """
-        delta: dict[Any, Any] = {}
-        for change_type in self._DEEPCONFIG_CHANGE_TYPES:
-            self._apply_deepdiff_changes(delta=delta, changes=deepdiff_obj.get(change_type, []) or [])
-        return delta
-
-    def _clean_diff(self, diff: DeepDiff) -> list[Any] | dict[Any, Any]:
+    def _clean_diff(self, diff: Any) -> list[Any] | dict[Any, Any]:
         """Convert DeepDiff(tree) into an intended-shaped delta, then prune empty containers.
 
         If `diff` resembles DeepDiff(tree) output, a delta is built from intended-side values (t2).
@@ -552,18 +508,23 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
         None values are preserved because they are meaningful in API payloads.
 
         Args:
-            diff (DeepDiff): DeepDiff(tree) result or arbitrary structure.
+            diff (Any): DeepDiff(tree) result or empty dictionary.
 
         Returns:
             list[Any] | dict[Any, Any]: Intended-shaped delta with empty containers removed (None preserved).
         """
-        if not isinstance(diff, dict) and any(k in diff for k in self._DEEPCONFIG_CHANGE_TYPES):
+        if not isinstance(diff, dict):
             return self._prune_empty_containers(obj=diff)
 
-        delta = self._build_intended_delta(deepdiff_obj=diff)
+        if not any(k in diff for k in self._DEEPCONFIG_CHANGE_TYPES):
+            return self._prune_empty_containers(obj=diff)
+
+        delta: dict[Any, Any] = {}
+        for change_type in self._DEEPCONFIG_CHANGE_TYPES:
+            self._apply_deepdiff_changes(delta=delta, changes=diff.get(change_type, []) or [])
         return self._prune_empty_containers(obj=delta)
 
-    def controller_remediation(self) -> str:
+    def api_remediation(self) -> str:
         """Generate the remediation payload for the current feature.
 
         Workflow:
@@ -581,11 +542,16 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
             str: JSON remediation payload (delta), or an empty string when there are no differences.
         """
         config_context: dict[str, Any] = self.compliance_obj.device.get_config_context()
-
-        # If the device requests full intended remediation, return it verbatim.
-        if config_context.get("remediate_full_intended"):
+        try:
+            if isinstance(self.backup_config, str):
+                self.backup_config = json.loads(self.backup_config)
             if isinstance(self.intended_config, str):
                 self.intended_config = json.loads(self.intended_config)
+        except json.JSONDecodeError as exc:
+            msg: str = f"Invalid JSON config: {exc}"
+            raise ValidationError(msg) from exc
+
+        if config_context.get("remediate_full_intended"):
             return json.dumps(obj=self.intended_config, indent=4)
 
         intended: list[Any] | dict[Any, Any] = self._filter_allowed_params(
@@ -600,7 +566,8 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
         )
 
         if not actual or not intended:
-            raise ValidationError("There was no config context passed.")
+            msg: str = "There was no config context fields that matched the intended or actual configuration."
+            raise ValidationError(msg)
 
         dict_key_intended: list[Any] | dict[Any, Any] = _wrap_dict_keys(obj=intended)
         dict_key_actual: list[Any] | dict[Any, Any] = _wrap_dict_keys(obj=actual)
@@ -610,13 +577,11 @@ class ApiRemediation:  # pylint: disable=too-few-public-methods
             intended=dict_key_intended,
         )
 
-        # No diff at all -> nothing to remediate
         if not dd:
             return ""
 
-        cleaned_diff: dict[Any, Any] = self._clean_diff(diff=dd)
+        cleaned_diff: list[Any] | dict[Any, Any] = self._clean_diff(diff=dd)
 
-        # If delta is empty after cleaning, there is nothing to apply.
         if not cleaned_diff:
             return ""
 
@@ -633,7 +598,7 @@ def _get_api_remediation(obj) -> str:
         str: The remediation configuration as a string.
     """
     json_controller = ApiRemediation(compliance_obj=obj)
-    return json_controller.controller_remediation()
+    return json_controller.api_remediation()
 
 
 # The below maps the provided compliance types
